@@ -3,11 +3,11 @@
 #ifndef _RESOURCE_HEADER
 #define _RESOURCE_HEADER
 
-#ifdef HAVE_SELINUX
 #include "../minzip/Zip.h"
-#else
-#include "../minzipold/Zip.h"
-#endif
+
+extern "C" {
+#include "../minuitwrp/minui.h"
+}
 
 // Base Objects
 class Resource
@@ -25,15 +25,9 @@ private:
 
 protected:
 	static int ExtractResource(ZipArchive* pZip, std::string folderName, std::string fileName, std::string fileExtn, std::string destFile);
+	static void LoadImage(ZipArchive* pZip, std::string file, gr_surface* source);
+	static void CheckAndScaleImage(gr_surface source, gr_surface* destination, int retain_aspect);
 };
-
-typedef enum {
-	TOUCH_START = 0,
-	TOUCH_DRAG = 1,
-	TOUCH_RELEASE = 2,
-	TOUCH_HOLD = 3,
-	TOUCH_REPEAT = 4
-} TOUCH_STATE;
 
 class FontResource : public Resource
 {
@@ -60,7 +54,7 @@ protected:
 class ImageResource : public Resource
 {
 public:
-	ImageResource(xml_node<>* node, ZipArchive* pZip);
+	ImageResource(xml_node<>* node, ZipArchive* pZip, int retain_aspect);
 	virtual ~ImageResource();
 
 public:
@@ -73,12 +67,12 @@ protected:
 class AnimationResource : public Resource
 {
 public:
-	AnimationResource(xml_node<>* node, ZipArchive* pZip);
+	AnimationResource(xml_node<>* node, ZipArchive* pZip, int retain_aspect);
 	virtual ~AnimationResource();
 
 public:
-	virtual void* GetResource(void) { return mSurfaces.at(0); }
-	virtual void* GetResource(int entry) { return mSurfaces.at(entry); }
+	virtual void* GetResource(void) { return mSurfaces.empty() ? NULL : mSurfaces.at(0); }
+	virtual void* GetResource(int entry) { return mSurfaces.empty() ? NULL : mSurfaces.at(entry); }
 	virtual int GetResourceCount(void) { return mSurfaces.size(); }
 
 protected:

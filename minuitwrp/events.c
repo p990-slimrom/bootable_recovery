@@ -458,15 +458,27 @@ static int vk_modify(struct ev *e, struct input_event *ev)
             e->mt_p.synced = 0x03;
             if (ev->value == (1 << 31))
             {
+#ifndef TW_IGNORE_MT_POSITION_0
                 e->mt_p.x = 0;
                 e->mt_p.y = 0;
                 lastWasSynReport = 1;
+#endif
+#ifdef _EVENT_LOGGING
+#ifndef TW_IGNORE_MT_POSITION_0
+                printf("EV: %s => EV_ABS  ABS_MT_POSITION  %d, set x and y to 0 and lastWasSynReport to 1\n", e->deviceName, ev->value);
+#else
+                printf("Ignoring ABS_MT_POSITION 0\n", e->deviceName, ev->value);
+#endif
+#endif
             }
             else
             {
                 lastWasSynReport = 0;
                 e->mt_p.x = (ev->value & 0x7FFF0000) >> 16;
                 e->mt_p.y = (ev->value & 0xFFFF);
+#ifdef _EVENT_LOGGING
+                printf("EV: %s => EV_ABS  ABS_MT_POSITION  %d, set x: %d and y: %d and lastWasSynReport to 0\n", e->deviceName, ev->value, (ev->value & 0x7FFF0000) >> 16, (ev->value & 0xFFFF));
+#endif
             }
             break;
 
@@ -707,46 +719,43 @@ static int vk_modify(struct ev *e, struct input_event *ev)
     return 0;
 }
 
-int ev_get(struct input_event *ev, unsigned dont_wait)
+int ev_get(struct input_event *ev, int timeout_ms)
 {
     int r;
     unsigned n;
     struct timeval curr;
 
-    do {
-        gettimeofday(&curr, NULL);
-        if(curr.tv_sec - lastInputStat.tv_sec >= 2)
+    gettimeofday(&curr, NULL);
+    if(curr.tv_sec - lastInputStat.tv_sec >= 2)
+    {
+        struct stat st;
+        stat("/dev/input", &st);
+        if (st.st_mtime > lastInputMTime)
         {
-            struct stat st;
-            stat("/dev/input", &st);
-            if (st.st_mtime > lastInputMTime)
-            {
-                LOGI("Reloading input devices\n");
-                ev_exit();
-                ev_init();
-                lastInputMTime = st.st_mtime;
-            }
-            lastInputStat = curr;
+            printf("Reloading input devices\n");
+            ev_exit();
+            ev_init();
+            lastInputMTime = st.st_mtime;
         }
+        lastInputStat = curr;
+    }
 
-        r = poll(ev_fds, ev_count, 0);
+    r = poll(ev_fds, ev_count, timeout_ms);
 
-        if(r > 0) {
-            for(n = 0; n < ev_count; n++) {
-                if(ev_fds[n].revents & POLLIN) {
-                    r = read(ev_fds[n].fd, ev, sizeof(*ev));
-                    if(r == sizeof(*ev)) {
-                        if (!vk_modify(&evs[n], ev))
-                            return 0;
-                    }
+    if(r > 0) {
+        for(n = 0; n < ev_count; n++) {
+            if(ev_fds[n].revents & POLLIN) {
+                r = read(ev_fds[n].fd, ev, sizeof(*ev));
+                if(r == sizeof(*ev)) {
+                    if (!vk_modify(&evs[n], ev))
+                        return 0;
                 }
             }
         }
+        return -1;
+    }
 
-        usleep(1000);
-    } while(dont_wait == 0);
-
-    return -1;
+    return -2;
 }
 
 int ev_wait(int timeout)

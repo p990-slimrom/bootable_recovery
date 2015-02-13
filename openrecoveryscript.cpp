@@ -28,6 +28,8 @@
 #include <errno.h>
 #include <iostream>
 #include <fstream>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #include "twrp-functions.hpp"
 #include "partitions.hpp"
@@ -36,9 +38,12 @@
 #include "variables.h"
 #include "adb_install.h"
 #include "data.hpp"
+#include "adb_install.h"
+#include "fuse_sideload.h"
 extern "C" {
 	#include "twinstall.h"
 	#include "gui/gui.h"
+	#include "cutils/properties.h"
 	int TWinstall_zip(const char* path, int* wipe_cache);
 }
 
@@ -344,31 +349,33 @@ int OpenRecoveryScript::run_script_file(void) {
 				install_cmd = -1;
 
 				int wipe_cache = 0;
-				string result, Sideload_File;
+				string result;
+				pid_t sideload_child_pid;
 
-				if (!PartitionManager.Mount_Current_Storage(true)) {
+				gui_print("Starting ADB sideload feature...\n");
+				ret_val = apply_from_adb("/", &sideload_child_pid);
+				if (ret_val != 0) {
+					if (ret_val == -2)
+						gui_print("You need adb 1.0.32 or newer to sideload to this device.\n");
 					ret_val = 1; // failure
+				} else if (TWinstall_zip(FUSE_SIDELOAD_HOST_PATHNAME, &wipe_cache) == 0) {
+					if (wipe_cache)
+						PartitionManager.Wipe_By_Path("/cache");
 				} else {
-					Sideload_File = DataManager::GetCurrentStoragePath() + "/sideload.zip";
-					if (TWFunc::Path_Exists(Sideload_File)) {
-						unlink(Sideload_File.c_str());
-					}
-					gui_print("Starting ADB sideload feature...\n");
-					DataManager::SetValue("tw_has_cancel", 1);
-					DataManager::SetValue("tw_cancel_action", "adbsideloadcancel");
-					ret_val = apply_from_adb(Sideload_File.c_str());
-					DataManager::SetValue("tw_has_cancel", 0);
-					if (ret_val != 0)
-						ret_val = 1; // failure
-					else if (TWinstall_zip(Sideload_File.c_str(), &wipe_cache) == 0) {
-						if (wipe_cache)
-							PartitionManager.Wipe_By_Path("/cache");
-					} else {
-						ret_val = 1; // failure
-					}
-					sideload = 1; // Causes device to go to the home screen afterwards
-					gui_print("Sideload finished.\n");
+					ret_val = 1; // failure
 				}
+				sideload = 1; // Causes device to go to the home screen afterwards
+				if (sideload_child_pid != 0) {
+					LOGINFO("Signaling child sideload process to exit.\n");
+					struct stat st;
+					// Calling stat() on this magic filename signals the minadbd
+					// subprocess to shut down.
+					stat(FUSE_SIDELOAD_HOST_EXIT_PATHNAME, &st);
+					int status;
+					LOGINFO("Waiting for child sideload process to exit.\n");
+					waitpid(sideload_child_pid, &status, 0);
+				}
+				gui_print("Sideload finished.\n");
 			} else if (strcmp(command, "fixperms") == 0 || strcmp(command, "fixpermissions") == 0) {
 				ret_val = PartitionManager.Fix_Permissions();
 				if (ret_val != 0)
@@ -430,34 +437,43 @@ int OpenRecoveryScript::Install_Command(string Zip) {
 	std::vector<PartitionList> Storage_List;
 	string Full_Path;
 
-	PartitionManager.Mount_All_Storage();
-	PartitionManager.Get_Partition_List("storage", &Storage_List);
-	int listSize = Storage_List.size();
-	for (int i = 0; i < listSize; i++) {
-		if (PartitionManager.Is_Mounted_By_Path(Storage_List.at(i).Mount_Point)) {
-			Full_Path = Storage_List.at(i).Mount_Point + "/" + Zip;
-			if (TWFunc::Path_Exists(Full_Path)) {
-				Zip = Full_Path;
-				break;
-			}
-			Full_Path = Zip;
-			LOGINFO("Trying to find zip '%s' on '%s'...\n", Full_Path.c_str(), Storage_List.at(i).Mount_Point.c_str());
-			ret_string = Locate_Zip_File(Full_Path, Storage_List.at(i).Mount_Point);
-			if (!ret_string.empty()) {
-				Zip = ret_string;
-				break;
+	if (Zip.substr(0, 1) == "@") {
+		// This is a special file that contains a map of blocks on the data partition
+		Full_Path = Zip.substr(1);
+		if (!PartitionManager.Mount_By_Path(Full_Path, true) || !TWFunc::Path_Exists(Full_Path)) {
+			gui_print("Unable to install via mapped zip '%s'\n", Full_Path.c_str());
+			return 1;
+		}
+		gui_print("Installing mapped zip file '%s'\n", Full_Path.c_str());
+	} else if (!TWFunc::Path_Exists(Zip)) {
+		PartitionManager.Mount_All_Storage();
+		PartitionManager.Get_Partition_List("storage", &Storage_List);
+		int listSize = Storage_List.size();
+		for (int i = 0; i < listSize; i++) {
+			if (PartitionManager.Is_Mounted_By_Path(Storage_List.at(i).Mount_Point)) {
+				Full_Path = Storage_List.at(i).Mount_Point + "/" + Zip;
+				if (TWFunc::Path_Exists(Full_Path)) {
+					Zip = Full_Path;
+					break;
+				}
+				Full_Path = Zip;
+				LOGINFO("Trying to find zip '%s' on '%s'...\n", Full_Path.c_str(), Storage_List.at(i).Mount_Point.c_str());
+				ret_string = Locate_Zip_File(Full_Path, Storage_List.at(i).Mount_Point);
+				if (!ret_string.empty()) {
+					Zip = ret_string;
+					break;
+				}
 			}
 		}
+		if (!TWFunc::Path_Exists(Zip)) {
+			// zip file doesn't exist
+			gui_print("Unable to locate zip file '%s'.\n", Zip.c_str());
+			ret_val = 1;
+		} else
+			gui_print("Installing zip file '%s'\n", Zip.c_str());
 	}
 
-	if (!TWFunc::Path_Exists(Zip)) {
-		// zip file doesn't exist
-		gui_print("Unable to locate zip file '%s'.\n", Zip.c_str());
-		ret_val = 1;
-	} else {
-		gui_print("Installing zip file '%s'\n", Zip.c_str());
-		ret_val = TWinstall_zip(Zip.c_str(), &wipe_cache);
-	}
+	ret_val = TWinstall_zip(Zip.c_str(), &wipe_cache);
 	if (ret_val != 0) {
 		LOGERR("Error installing zip file '%s'\n", Zip.c_str());
 		ret_val = 1;
@@ -559,7 +575,7 @@ void OpenRecoveryScript::Run_OpenRecoveryScript(void) {
 	DataManager::SetValue("tw_complete_text1", "OpenRecoveryScript Complete");
 	DataManager::SetValue("tw_has_cancel", 0);
 	DataManager::SetValue("tw_show_reboot", 0);
-	if (gui_startPage("action_page") != 0) {
+	if (gui_startPage("action_page", 0, 1) != 0) {
 		LOGERR("Failed to load OpenRecoveryScript GUI page.\n");
 	}
 }

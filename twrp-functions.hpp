@@ -72,10 +72,6 @@ public:
 	static int read_file(string fn, string& results); //read from file
 	static int read_file(string fn, uint64_t& results); //read from file
 	static int write_file(string fn, string& line); //write from file
-	static int drop_caches(void); //drop linux cache memory
-	static int Check_su_Perms(void); // check perms and owner of su binary in various locations
-	static bool Fix_su_Perms(void); // sets proper permissions for su binaries and superuser apk
-	static int tw_chmod(const string& fn, const string& mode); // chmod function that converts a 3 or 4 char string into st_mode automatically
 	static bool Install_SuperSU(void); // Installs su binary and apk and sets proper permissions
 	static bool Try_Decrypting_Backup(string Restore_Path, string Password); // true for success, false for failed to decrypt
 	static string System_Property_Get(string Prop_Name);                // Returns value of Prop_Name from reading /system/build.prop
@@ -87,8 +83,8 @@ public:
 	static int Set_Brightness(std::string brightness_value); // Well, you can read, it does what it says, passing return int from TWFunc::Write_File ;)
 	static bool Toggle_MTP(bool enable);                                        // Disables MTP if enable is false and re-enables MTP if enable is true and it was enabled the last time it was toggled off
 	static std::string to_string(unsigned long value); //convert ul to string
-
 	static void SetPerformanceMode(bool mode); // support recovery.perf.mode
+	static void Disable_Stock_Recovery_Replace(); // Disable stock ROMs from replacing TWRP with stock recovery
 
 private:
 	static void Copy_Log(string Source, string Destination);
